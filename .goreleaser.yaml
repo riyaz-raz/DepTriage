@@ -1,0 +1,62 @@
+version: 2
+
+project_name: deptriage
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: deptriage
+    main: ./cmd/deptriage
+    binary: deptriage
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: archives
+    builds:
+      - deptriage
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+release:
+  github:
+    owner: deptriage
+    name: deptriage
+  draft: false
+  prerelease: auto
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+# Optional Homebrew publishing can be enabled when a tap repository and
+# HOMEBREW_TAP_TOKEN are available. The release workflow intentionally leaves
+# this disabled until the tap is created.
+# brews:
+#   - repository:
+#       owner: deptriage
+#       name: homebrew-tap
+#       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+#     directory: Formula
+#     homepage: https://github.com/deptriage/deptriage
+#     description: Triage Dependabot and Renovate pull requests with an LLM
+#     license: MIT
+#     install: |
+#       bin.install "deptriage"
