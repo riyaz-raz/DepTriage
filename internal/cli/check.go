@@ -44,7 +44,7 @@ func newCheckCommand() *cobra.Command {
 
 func makeCheckCommand(deps *checkDependencies) *cobra.Command {
 	var repo, providerName, model, failOn, token, fakeVerdict string
-	var jsonOutput, includeAll bool
+	var jsonOutput, includeAll, dryRun bool
 	var limit int
 	var timeout time.Duration
 	cmd := &cobra.Command{
@@ -58,14 +58,8 @@ func makeCheckCommand(deps *checkDependencies) *cobra.Command {
 			if failOn != "risk" && failOn != "review" && failOn != "none" {
 				return &ExitError{Code: 2, Err: fmt.Errorf("--fail-on must be risk, review, or none")}
 			}
-			if providerName == "" {
-				providerName = "fake"
-			}
-			if providerName != "fake" && providerName != "ollama" && providerName != "gemini" && providerName != "groq" && providerName != "openai" {
+			if providerName != "" && providerName != "fake" && providerName != "ollama" && providerName != "gemini" && providerName != "groq" && providerName != "openai" {
 				return &ExitError{Code: 2, Err: fmt.Errorf("provider %q not implemented in M4", providerName)}
-			}
-			if providerName == "fake" && model == "" {
-				model = "fake"
 			}
 			if limit < 1 {
 				return &ExitError{Code: 2, Err: fmt.Errorf("--limit must be greater than zero")}
@@ -74,48 +68,58 @@ func makeCheckCommand(deps *checkDependencies) *cobra.Command {
 				return &ExitError{Code: 2, Err: fmt.Errorf("--timeout must not be negative")}
 			}
 			if deps == nil {
+				cfg, _, err := config.LoadDefault()
+				if err != nil {
+					return &ExitError{Code: 2, Err: fmt.Errorf("load provider configuration: %w", err)}
+				}
+				flagSet := cmd.Flags().Changed("provider")
+				cloud, ollamaReachable := []string(nil), false
+				if !flagSet && strings.TrimSpace(os.Getenv("DEPTRIAGE_PROVIDER")) == "" && strings.TrimSpace(cfg.DefaultProvider) == "" {
+					cloud, ollamaReachable = autoDetection(cfg, probeEndpoint, cmd.Context())
+				}
+				providerName, _ = resolveProviderName(providerName, flagSet, os.Getenv("DEPTRIAGE_PROVIDER"), cfg.DefaultProvider, cloud, ollamaReachable)
+				if providerName == "" {
+					return &ExitError{Code: 2, Err: errors.New(onboardingMessage(onboardingReasons(cfg, probeEndpoint, cmd.Context())))}
+				}
+				providerName = strings.ToLower(strings.TrimSpace(providerName))
+				if providerName != "fake" && providerName != "ollama" && providerName != "gemini" && providerName != "groq" && providerName != "openai" {
+					return &ExitError{Code: 2, Err: fmt.Errorf("provider %q not implemented in M4", providerName)}
+				}
 				var selectedProvider llm.Provider
-				if providerName == "fake" {
-					var err error
+				switch providerName {
+				case "fake":
 					selectedProvider, err = fake.New(fakeVerdict)
-					if err != nil {
-						return &ExitError{Code: 2, Err: err}
+					model = config.Resolve(model, "", "fake")
+				case "ollama":
+					client := ollama.New(cfg.Ollama.Host, cfg.Ollama.Model)
+					selectedProvider, model = client, client.Model(config.Resolve(model, "", cfg.DefaultModel))
+				case "gemini":
+					key := providerKey(providerName, cfg)
+					if key == "" {
+						return &ExitError{Code: 2, Err: fmt.Errorf("provider gemini requires GEMINI_API_KEY or config [keys].gemini — get a free key at https://aistudio.google.com/apikey")}
 					}
-				} else {
-					cfg, _, err := config.LoadDefault()
-					if err != nil {
-						return fmt.Errorf("load provider configuration: %w", err)
+					client := gemini.New(key, cfg.Gemini.Model)
+					selectedProvider, model = client, client.Model(model)
+				case "groq":
+					key := providerKey(providerName, cfg)
+					if key == "" {
+						return &ExitError{Code: 2, Err: fmt.Errorf("provider groq requires GROQ_API_KEY or config [keys].groq — get a free key at https://console.groq.com/keys")}
 					}
-					switch providerName {
-					case "ollama":
-						client := ollama.New(cfg.Ollama.Host, cfg.Ollama.Model)
-						selectedProvider = client
-						model = client.Model(model)
-					case "gemini":
-						key := resolveAPIKey(os.Getenv("GEMINI_API_KEY"), cfg.Keys["gemini"])
-						if key == "" {
-							return &ExitError{Code: 2, Err: fmt.Errorf("provider gemini requires GEMINI_API_KEY or config [keys].gemini — get a free key at https://aistudio.google.com/apikey")}
-						}
-						client := gemini.New(key, cfg.Gemini.Model)
-						selectedProvider = client
-						model = client.Model(model)
-					case "groq":
-						key := resolveAPIKey(os.Getenv("GROQ_API_KEY"), cfg.Keys["groq"])
-						if key == "" {
-							return &ExitError{Code: 2, Err: fmt.Errorf("provider groq requires GROQ_API_KEY or config [keys].groq — get a free key at https://console.groq.com/keys")}
-						}
-						client := groq.New(key, cfg.Groq.Model)
-						selectedProvider = client
-						model = client.Model(model)
-					case "openai":
-						key := resolveAPIKey(os.Getenv("OPENAI_API_KEY"), cfg.Keys["openai"])
-						if key == "" {
-							return &ExitError{Code: 2, Err: fmt.Errorf("provider openai requires OPENAI_API_KEY or config [keys].openai — get a free key at https://platform.openai.com/api-keys")}
-						}
-						client := openai.New(key, cfg.OpenAI.BaseURL, cfg.OpenAI.Model)
-						selectedProvider = client
-						model = client.Model(model)
+					client := groq.New(key, cfg.Groq.Model)
+					selectedProvider, model = client, client.Model(model)
+				case "openai":
+					key := providerKey(providerName, cfg)
+					if key == "" {
+						return &ExitError{Code: 2, Err: fmt.Errorf("provider openai requires OPENAI_API_KEY or config [keys].openai — get a free key at https://platform.openai.com/api-keys")}
 					}
+					client := openai.New(key, cfg.OpenAI.BaseURL, cfg.OpenAI.Model)
+					selectedProvider, model = client, client.Model(model)
+				}
+				if err != nil {
+					return &ExitError{Code: 2, Err: err}
+				}
+				if providerName == "fake" && model == "" {
+					model = "fake"
 				}
 				if token == "" {
 					token = os.Getenv("GITHUB_TOKEN")
@@ -147,10 +151,17 @@ func makeCheckCommand(deps *checkDependencies) *cobra.Command {
 					continue
 				}
 				signals := triage.EvaluateSignals(pr, prContext)
-				request := llm.Request{PR: pr, Context: prContext, Model: model, Temp: 0.0, Timeout: timeout, Schema: llm.VerdictSchema}
-				if deps.provider.Name() != "fake" {
-					request.System = "Classify dependency update pull requests as safe (low risk), review (human attention needed), or risk (high risk, breaking, or security relevant). Lockfile-only changes are usually safe; major version bumps and security advisories are usually risk. Return only JSON matching the supplied schema."
-					request.User = buildClassificationPrompt(pr, prContext, signals)
+				request := llm.Request{
+					PR: pr, Context: prContext, Model: model, Temp: 0.0, Timeout: timeout,
+					Schema: llm.VerdictSchema,
+					System: "Classify dependency update pull requests as safe (low risk), review (human attention needed), or risk (high risk, breaking, or security relevant). Lockfile-only changes are usually safe; major version bumps and security advisories are usually risk. Return only JSON matching the supplied schema.",
+					User:   buildClassificationPrompt(pr, prContext, signals),
+				}
+				if dryRun {
+					if _, err := fmt.Fprintf(cmd.OutOrStdout(), "PR #%d SYSTEM PROMPT:\n%s\n\nUSER PROMPT:\n%s\n\n", pr.Number, request.System, request.User); err != nil {
+						return fmt.Errorf("write dry-run prompts: %w", err)
+					}
+					continue
 				}
 				verdict, classifyErr := deps.provider.Classify(llm.WithRequestTimeout(ctx, request.Timeout), request)
 				if classifyErr != nil {
@@ -160,6 +171,9 @@ func makeCheckCommand(deps *checkDependencies) *cobra.Command {
 				}
 				degraded := verdict.Degraded
 				results = append(results, report.Result{PR: pr, Context: prContext, Signals: signals, Verdict: triage.Merge(verdict, signals), Degraded: degraded})
+			}
+			if dryRun {
+				return nil
 			}
 			if jsonOutput {
 				err = report.RenderJSON(cmd.OutOrStdout(), results, owner+"/"+repository, deps.provider.Name(), model)
@@ -189,15 +203,16 @@ func makeCheckCommand(deps *checkDependencies) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVarP(&repo, "repo", "r", "", "GitHub repository in owner/repo format")
-	cmd.Flags().StringVar(&providerName, "provider", "fake", "LLM provider (fake, ollama, gemini, groq, or openai)")
+	cmd.Flags().StringVar(&providerName, "provider", "", "LLM provider (auto, fake, ollama, gemini, groq, or openai)")
 	cmd.Flags().StringVar(&model, "model", "", "model name (provider default when omitted)")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "emit JSON output")
 	cmd.Flags().IntVar(&limit, "limit", 25, "maximum open pull requests to process")
 	cmd.Flags().BoolVar(&includeAll, "include-all-authors", false, "include PRs from all authors")
 	cmd.Flags().StringVar(&failOn, "fail-on", "none", "exit 3 when risk, review, or none is reached")
-	cmd.Flags().DurationVar(&timeout, "timeout", 90*time.Second, "overall check timeout")
+	cmd.Flags().DurationVar(&timeout, "timeout", 90*time.Second, "per-request timeout")
 	cmd.Flags().StringVar(&token, "github-token", "", "GitHub personal access token (or GITHUB_TOKEN)")
 	cmd.Flags().StringVar(&fakeVerdict, "fake-verdict", "", "internal test override for the fake provider")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print prompts without calling an LLM")
 	_ = cmd.Flags().MarkHidden("fake-verdict")
 
 	return cmd

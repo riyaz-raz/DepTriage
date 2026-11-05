@@ -65,6 +65,7 @@ func NewRoot(version string) *cobra.Command {
 	})
 	root.AddCommand(configCommand())
 	root.AddCommand(newCheckCommand())
+	root.AddCommand(providersCommand())
 	return root
 }
 

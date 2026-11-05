@@ -2,7 +2,7 @@
   "schema_version": 1,
   "repo": "o/r",
   "provider": "fake",
-  "model": "fake",
+  "model": "",
   "generated_at": "<timestamp>",
   "summary": {
     "total": 1,
