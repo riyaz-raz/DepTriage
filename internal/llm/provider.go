@@ -3,6 +3,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/deptriage/deptriage/internal/github"
 	"github.com/deptriage/deptriage/internal/triage"
@@ -10,6 +11,11 @@ import (
 
 // Request contains the pull request context for classification.
 type Request struct {
+	System  string
+	User    string
+	Schema  json.RawMessage
+	Model   string
+	Temp    float64
 	PR      github.PR
 	Context github.PRContext
 }

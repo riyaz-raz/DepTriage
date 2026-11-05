@@ -11,8 +11,8 @@ Flags:
       --include-all-authors   include PRs from all authors
       --json                  emit JSON output
       --limit int             maximum open pull requests to process (default 25)
-      --model string          model label shown in report (default "fake")
-      --provider string       LLM provider (M2: fake only) (default "fake")
+      --model string          model name (provider default when omitted)
+      --provider string       LLM provider (fake or ollama) (default "fake")
   -r, --repo string           GitHub repository in owner/repo format
       --timeout duration      overall check timeout (default 1m30s)
 

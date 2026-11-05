@@ -67,6 +67,7 @@ type PRContext struct {
 	DependencyName string        `json:"dependency_name"`
 	FromVersion    string        `json:"from_version"`
 	ToVersion      string        `json:"to_version"`
+	Update         string        `json:"-"`
 }
 
 // Client provides read-only pull request operations.
@@ -194,8 +195,8 @@ func (c *GitHubClient) FetchContext(ctx context.Context, owner, repo string, prN
 	if err != nil {
 		return PRContext{}, err
 	}
-	dep, from, to := ParseUpdate(pr.Title)
-	return PRContext{PR: pr, ChangedFiles: files, Additions: additions, Deletions: deletions, CIStatus: ci, DependencyName: dep, FromVersion: from, ToVersion: to}, nil
+	dep, from, to, update := ParseDependencyInfo(pr.Title)
+	return PRContext{PR: pr, ChangedFiles: files, Additions: additions, Deletions: deletions, CIStatus: ci, DependencyName: dep, FromVersion: from, ToVersion: to, Update: update}, nil
 }
 
 func (c *GitHubClient) fetchCI(ctx context.Context, owner, repo, sha string) (CIStatus, error) {
@@ -263,15 +264,43 @@ func (c *GitHubClient) wrapAPIError(err error, response *gh.Response) error {
 	return fmt.Errorf("GitHub API request failed: %w", err)
 }
 
-var updatePattern = regexp.MustCompile(`(?i)^\s*(?:bump\s+)?(.+?)\s+from\s+v?([0-9]+(?:\.[0-9]+){0,2}(?:[-+][0-9A-Za-z.-]+)?)\s+to\s+v?([0-9]+(?:\.[0-9]+){0,2}(?:[-+][0-9A-Za-z.-]+)?)`)
+var (
+	updatePattern = regexp.MustCompile(`(?i)^(.+?)\s+from\s+v?([0-9]+(?:\.[0-9]+){0,2}(?:[-+][0-9A-Za-z.-]+)?)\s+to\s+v?([0-9]+(?:\.[0-9]+){0,2}(?:[-+][0-9A-Za-z.-]+)?)(?:\s.*)?$`)
+	groupPattern  = regexp.MustCompile(`(?i)^the\s+(.+?)\s+group\s+with\s+\d+\s+updates(?:\s.*)?$`)
+)
 
 // ParseUpdate best-effort extracts a dependency and old/new versions from a PR title.
 func ParseUpdate(title string) (dependency, from, to string) {
-	match := updatePattern.FindStringSubmatch(title)
-	if len(match) != 4 {
-		return "", "", ""
+	dependency, from, to, _ = ParseDependencyInfo(title)
+	return dependency, from, to
+}
+
+// ParseDependencyInfo parses standard and grouped Dependabot titles and provides display values.
+func ParseDependencyInfo(title string) (dependency, from, to, update string) {
+	clean := strings.TrimSpace(title)
+	lower := strings.ToLower(clean)
+	for _, prefix := range []string{"build(deps): bump ", "chore(deps): bump ", "bump ", "update "} {
+		if strings.HasPrefix(lower, prefix) {
+			clean = strings.TrimSpace(clean[len(prefix):])
+			break
+		}
 	}
-	return strings.TrimSpace(match[1]), match[2], match[3]
+	if match := groupPattern.FindStringSubmatch(clean); len(match) == 2 {
+		return strings.TrimSpace(match[1]) + " group", "", "", "(group)"
+	}
+	if match := updatePattern.FindStringSubmatch(clean); len(match) == 4 {
+		from, to = match[2], match[3]
+		return strings.TrimSpace(match[1]), from, to, from + " -> " + to
+	}
+	return truncateRunes(strings.TrimSpace(title), 60), "", "", ""
+}
+
+func truncateRunes(value string, maxLength int) string {
+	runes := []rune(value)
+	if len(runes) <= maxLength {
+		return value
+	}
+	return string(runes[:maxLength])
 }
 
 // IsLockfile reports whether path is a recognized dependency lockfile.

@@ -109,10 +109,10 @@ func TestCheckEndToEndExitCodes(t *testing.T) {
 
 func TestCheckUsageExitCodes(t *testing.T) {
 	cmd := makeCheckCommand(&checkDependencies{})
-	cmd.SetArgs([]string{"-r", "o/r", "--provider", "ollama"})
+	cmd.SetArgs([]string{"-r", "o/r", "--provider", "gemini"})
 	err := cmd.Execute()
 	var exitErr *ExitError
-	if !errors.As(err, &exitErr) || exitErr.Code != 2 || !strings.Contains(err.Error(), "not implemented in M2") {
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 || !strings.Contains(err.Error(), "not implemented in M3") {
 		t.Fatalf("provider error = %v", err)
 	}
 

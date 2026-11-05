@@ -47,21 +47,28 @@ func TestEvaluateSignals(t *testing.T) {
 
 func TestMerge(t *testing.T) {
 	cases := []struct {
-		name    string
-		input   string
-		signals []Signal
-		want    string
+		name       string
+		input      string
+		confidence float64
+		signals    []Signal
+		want       string
+		wantReason string
 	}{
-		{"signal forces risk", "safe", []Signal{{Score: 3}}, "risk"},
-		{"positive score downgrades safe", "safe", []Signal{{Score: 2}}, "review"},
-		{"risk is not downgraded", "risk", []Signal{{Score: -5}}, "risk"},
-		{"review remains review", "review", []Signal{{Score: -3}}, "review"},
+		{"signal forces risk", "safe", 0.9, []Signal{{Score: 3}}, "risk", ""},
+		{"positive score downgrades safe", "safe", 0.9, []Signal{{Score: 2}}, "review", ""},
+		{"risk is not downgraded", "risk", 0.9, []Signal{{Score: -5}}, "risk", ""},
+		{"review remains review", "review", 0.9, []Signal{{Score: -3}}, "review", ""},
+		{"low confidence safe becomes review", "safe", 0.69, nil, "review", "low_confidence"},
+		{"safe at 0.9 stays safe", "safe", 0.9, nil, "safe", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := Merge(Verdict{Verdict: tc.input}, tc.signals)
+			got := Merge(Verdict{Verdict: tc.input, Confidence: tc.confidence}, tc.signals)
 			if got.Verdict != tc.want {
 				t.Fatalf("Merge() = %q, want %q", got.Verdict, tc.want)
+			}
+			if tc.wantReason != "" && (len(got.Reasons) == 0 || got.Reasons[len(got.Reasons)-1] != tc.wantReason) {
+				t.Fatalf("Merge() reasons = %#v, want final reason %q", got.Reasons, tc.wantReason)
 			}
 		})
 	}

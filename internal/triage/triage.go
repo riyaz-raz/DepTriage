@@ -23,6 +23,7 @@ type Verdict struct {
 	Reasons                 []string `json:"reasons"`
 	BreakingChangeSuspected bool     `json:"breaking_change_suspected"`
 	SecurityRelevant        bool     `json:"security_relevant"`
+	Degraded                bool     `json:"-"`
 }
 
 // EvaluateSignals evaluates version, CI, security, dependency type, and diff signals.
@@ -98,8 +99,13 @@ func Merge(llmVerdict Verdict, signals []Signal) Verdict {
 	}
 	if forceRisk {
 		llmVerdict.Verdict = "risk"
-	} else if llmVerdict.Verdict == "safe" && score >= 1 {
-		llmVerdict.Verdict = "review"
+	} else if llmVerdict.Verdict == "safe" {
+		if llmVerdict.Confidence < 0.7 {
+			llmVerdict.Verdict = "review"
+			llmVerdict.Reasons = append(llmVerdict.Reasons, "low_confidence")
+		} else if score >= 1 {
+			llmVerdict.Verdict = "review"
+		}
 	}
 	return llmVerdict
 }

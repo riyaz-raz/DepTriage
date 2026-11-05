@@ -85,8 +85,8 @@ func RenderHuman(w io.Writer, results []Result, provider, model string, color bo
 		if useColor {
 			verdict = colorVerdict(verdict)
 		}
-		update := ""
-		if result.Context.FromVersion != "" || result.Context.ToVersion != "" {
+		update := result.Context.Update
+		if update == "" && (result.Context.FromVersion != "" || result.Context.ToVersion != "") {
 			update = result.Context.FromVersion + " -> " + result.Context.ToVersion
 		}
 		signalNames := make([]string, 0, len(result.Signals))
