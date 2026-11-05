@@ -1,0 +1,11 @@
+# Build outputs
+/deptriage
+/dist/
+
+# Go coverage and test artifacts
+/coverage.out
+/coverage.html
+*.test
+
+# Local configuration and secrets
+/config.toml
