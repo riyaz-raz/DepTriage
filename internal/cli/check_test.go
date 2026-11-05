@@ -144,6 +144,26 @@ func TestClassifyErrorIsReportedAsPartialExitFour(t *testing.T) {
 	}
 }
 
+func TestBuildClassificationPromptTruncatesBodyAndBudget(t *testing.T) {
+	pr := depgh.PR{Number: 1, Title: "Update dependency", Author: "dependabot[bot]", Body: strings.Repeat("body ", 2000)}
+	prContext := depgh.PRContext{CIStatus: depgh.CIPassing, DependencyName: "example", FromVersion: "1", ToVersion: "2"}
+	prompt := buildClassificationPromptWithBudget(pr, prContext, nil, 500)
+	if len([]rune(prompt)) > 500 {
+		t.Fatalf("prompt length = %d, want <= 500", len([]rune(prompt)))
+	}
+	if !strings.Contains(prompt, "Prompt truncated") {
+		t.Fatalf("truncation note missing from prompt: %q", prompt)
+	}
+}
+
+func TestBuildClassificationPromptTruncatesBodyAtFourThousandCharacters(t *testing.T) {
+	pr := depgh.PR{Body: strings.Repeat("x", 5000)}
+	prompt := buildClassificationPromptWithBudget(pr, depgh.PRContext{}, nil, 12000)
+	if strings.Count(prompt, "x") != 4000 {
+		t.Fatalf("body length in prompt = %d, want 4000", strings.Count(prompt, "x"))
+	}
+}
+
 func TestCheckUsageExitCodes(t *testing.T) {
 	cmd := makeCheckCommand(&checkDependencies{})
 	cmd.SetArgs([]string{"-r", "o/r", "--provider", "bogus"})

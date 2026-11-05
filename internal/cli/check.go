@@ -141,6 +141,15 @@ func makeCheckCommand(deps *checkDependencies) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("list pull requests: %w", err)
 			}
+			if len(prs) == 0 && !jsonOutput {
+				message := "No open dependency-update pull requests found."
+				if !includeAll {
+					message += " Use --include-all-authors to include PRs from other authors."
+				}
+				if _, err := fmt.Fprintln(cmd.OutOrStdout(), message); err != nil {
+					return fmt.Errorf("write empty-result message: %w", err)
+				}
+			}
 			results := make([]report.Result, 0, len(prs))
 			partial := false
 			for _, pr := range prs {
@@ -225,10 +234,43 @@ func resolveAPIKey(environment, configured string) string {
 	return strings.TrimSpace(configured)
 }
 
+const (
+	defaultPromptBudget = 8000
+	maxPromptBody       = 4000
+)
+
 func buildClassificationPrompt(pr depgh.PR, context depgh.PRContext, signals []triage.Signal) string {
+	return buildClassificationPromptWithBudget(pr, context, signals, defaultPromptBudget)
+}
+
+func buildClassificationPromptWithBudget(pr depgh.PR, context depgh.PRContext, signals []triage.Signal, budget int) string {
+	if budget <= 0 {
+		budget = defaultPromptBudget
+	}
 	signalNames := make([]string, 0, len(signals))
 	for _, signal := range signals {
 		signalNames = append(signalNames, fmt.Sprintf("%s (%+d): %s", signal.Name, signal.Score, signal.Reason))
 	}
-	return fmt.Sprintf("Pull request: #%d %s\nAuthor: %s\nBody:\n%s\nDependency: %s\nUpdate: %s -> %s\nChanged files: %d\nNon-lockfile additions/deletions: %d/%d\nCI: %s\nDeterministic signals: %s\n\nReturn a verdict, confidence, one-sentence summary, reasons, and the two boolean risk flags.", pr.Number, pr.Title, pr.Author, pr.Body, context.DependencyName, context.FromVersion, context.ToVersion, len(context.ChangedFiles), context.Additions, context.Deletions, context.CIStatus, strings.Join(signalNames, "; "))
+	body := truncatePromptText(pr.Body, maxPromptBody)
+	prompt := fmt.Sprintf("Pull request: #%d %s\nAuthor: %s\nBody:\n%s\nDependency: %s\nUpdate: %s -> %s\nChanged files: %d\nNon-lockfile additions/deletions: %d/%d\nCI: %s\nDeterministic signals: %s\n\nReturn a verdict, confidence, one-sentence summary, reasons, and the two boolean risk flags.", pr.Number, pr.Title, pr.Author, body, context.DependencyName, context.FromVersion, context.ToVersion, len(context.ChangedFiles), context.Additions, context.Deletions, context.CIStatus, strings.Join(signalNames, "; "))
+	if len([]rune(prompt)) <= budget {
+		return prompt
+	}
+	note := "\n\n[Prompt truncated to fit the configured budget.]"
+	available := budget - len([]rune(note))
+	if available <= 0 {
+		return truncatePromptText(note, budget)
+	}
+	return truncatePromptText(prompt, available) + note
+}
+
+func truncatePromptText(value string, maxLength int) string {
+	if maxLength <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= maxLength {
+		return value
+	}
+	return string(runes[:maxLength])
 }
