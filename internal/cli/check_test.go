@@ -109,10 +109,10 @@ func TestCheckEndToEndExitCodes(t *testing.T) {
 
 func TestCheckUsageExitCodes(t *testing.T) {
 	cmd := makeCheckCommand(&checkDependencies{})
-	cmd.SetArgs([]string{"-r", "o/r", "--provider", "gemini"})
+	cmd.SetArgs([]string{"-r", "o/r", "--provider", "bogus"})
 	err := cmd.Execute()
 	var exitErr *ExitError
-	if !errors.As(err, &exitErr) || exitErr.Code != 2 || !strings.Contains(err.Error(), "not implemented in M3") {
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 || !strings.Contains(err.Error(), "not implemented in M4") {
 		t.Fatalf("provider error = %v", err)
 	}
 
@@ -130,5 +130,23 @@ func TestCheckUsageExitCodes(t *testing.T) {
 	err = cmd.Execute()
 	if !errors.As(err, &exitErr) || exitErr.Code != 2 || !strings.Contains(err.Error(), "classic PAT with public_repo") {
 		t.Fatalf("missing token error = %v", err)
+	}
+
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	for _, tc := range []struct{ provider, keyEnv, message string }{
+		{"gemini", "GEMINI_API_KEY", "provider gemini requires GEMINI_API_KEY or config [keys].gemini"},
+		{"groq", "GROQ_API_KEY", "provider groq requires GROQ_API_KEY or config [keys].groq"},
+		{"openai", "OPENAI_API_KEY", "provider openai requires OPENAI_API_KEY or config [keys].openai"},
+	} {
+		t.Run("missing "+tc.provider+" key", func(t *testing.T) {
+			t.Setenv(tc.keyEnv, "")
+			cmd := makeCheckCommand(nil)
+			cmd.SetArgs([]string{"-r", "o/r", "--provider", tc.provider})
+			err := cmd.Execute()
+			var exitErr *ExitError
+			if !errors.As(err, &exitErr) || exitErr.Code != 2 || !strings.Contains(err.Error(), tc.message) {
+				t.Fatalf("missing key error = %v", err)
+			}
+		})
 	}
 }

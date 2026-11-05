@@ -12,7 +12,7 @@ Flags:
       --json                  emit JSON output
       --limit int             maximum open pull requests to process (default 25)
       --model string          model name (provider default when omitted)
-      --provider string       LLM provider (fake or ollama) (default "fake")
+      --provider string       LLM provider (fake, ollama, gemini, groq, or openai) (default "fake")
   -r, --repo string           GitHub repository in owner/repo format
       --timeout duration      overall check timeout (default 1m30s)
 

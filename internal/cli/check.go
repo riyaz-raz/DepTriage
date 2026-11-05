@@ -12,7 +12,10 @@ import (
 	depgh "github.com/deptriage/deptriage/internal/github"
 	"github.com/deptriage/deptriage/internal/llm"
 	"github.com/deptriage/deptriage/internal/llm/fake"
+	"github.com/deptriage/deptriage/internal/llm/gemini"
+	"github.com/deptriage/deptriage/internal/llm/groq"
 	"github.com/deptriage/deptriage/internal/llm/ollama"
+	"github.com/deptriage/deptriage/internal/llm/openai"
 	"github.com/deptriage/deptriage/internal/report"
 	"github.com/deptriage/deptriage/internal/triage"
 	"github.com/spf13/cobra"
@@ -59,8 +62,8 @@ func makeCheckCommand(deps *checkDependencies) *cobra.Command {
 			if providerName == "" {
 				providerName = "fake"
 			}
-			if providerName != "fake" && providerName != "ollama" {
-				return &ExitError{Code: 2, Err: fmt.Errorf("provider %q not implemented in M3", providerName)}
+			if providerName != "fake" && providerName != "ollama" && providerName != "gemini" && providerName != "groq" && providerName != "openai" {
+				return &ExitError{Code: 2, Err: fmt.Errorf("provider %q not implemented in M4", providerName)}
 			}
 			if providerName == "fake" && model == "" {
 				model = "fake"
@@ -72,6 +75,49 @@ func makeCheckCommand(deps *checkDependencies) *cobra.Command {
 				return &ExitError{Code: 2, Err: fmt.Errorf("--timeout must be greater than zero")}
 			}
 			if deps == nil {
+				var selectedProvider llm.Provider
+				if providerName == "fake" {
+					var err error
+					selectedProvider, err = fake.New(fakeVerdict)
+					if err != nil {
+						return &ExitError{Code: 2, Err: err}
+					}
+				} else {
+					cfg, _, err := config.LoadDefault()
+					if err != nil {
+						return fmt.Errorf("load provider configuration: %w", err)
+					}
+					switch providerName {
+					case "ollama":
+						client := ollama.New(cfg.Ollama.Host, cfg.Ollama.Model)
+						selectedProvider = client
+						model = client.Model(model)
+					case "gemini":
+						key := resolveAPIKey(os.Getenv("GEMINI_API_KEY"), cfg.Keys["gemini"])
+						if key == "" {
+							return &ExitError{Code: 2, Err: fmt.Errorf("provider gemini requires GEMINI_API_KEY or config [keys].gemini — get a free key at https://aistudio.google.com/apikey")}
+						}
+						client := gemini.New(key, cfg.Gemini.Model)
+						selectedProvider = client
+						model = client.Model(model)
+					case "groq":
+						key := resolveAPIKey(os.Getenv("GROQ_API_KEY"), cfg.Keys["groq"])
+						if key == "" {
+							return &ExitError{Code: 2, Err: fmt.Errorf("provider groq requires GROQ_API_KEY or config [keys].groq — get a free key at https://console.groq.com/keys")}
+						}
+						client := groq.New(key, cfg.Groq.Model)
+						selectedProvider = client
+						model = client.Model(model)
+					case "openai":
+						key := resolveAPIKey(os.Getenv("OPENAI_API_KEY"), cfg.Keys["openai"])
+						if key == "" {
+							return &ExitError{Code: 2, Err: fmt.Errorf("provider openai requires OPENAI_API_KEY or config [keys].openai — get a free key at https://platform.openai.com/api-keys")}
+						}
+						client := openai.New(key, cfg.OpenAI.BaseURL, cfg.OpenAI.Model)
+						selectedProvider = client
+						model = client.Model(model)
+					}
+				}
 				if token == "" {
 					token = os.Getenv("GITHUB_TOKEN")
 				}
@@ -87,27 +133,7 @@ func makeCheckCommand(deps *checkDependencies) *cobra.Command {
 				}
 				ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 				defer cancel()
-				deps = &checkDependencies{github: depgh.NewClient(ctx, token)}
-				if providerName == "fake" {
-					var err error
-					deps.provider, err = fake.New(fakeVerdict)
-					if err != nil {
-						return &ExitError{Code: 2, Err: err}
-					}
-					if model == "" {
-						model = "fake"
-					}
-				} else {
-					cfg, _, err := config.LoadDefault()
-					if err != nil {
-						return fmt.Errorf("load Ollama configuration: %w", err)
-					}
-					ollamaClient := ollama.New(cfg.Ollama.Host, cfg.Ollama.Model)
-					if model == "" {
-						model = ollamaClient.Model("")
-					}
-					deps.provider = ollamaClient
-				}
+				deps = &checkDependencies{github: depgh.NewClient(ctx, token), provider: selectedProvider}
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 			defer cancel()
@@ -125,8 +151,8 @@ func makeCheckCommand(deps *checkDependencies) *cobra.Command {
 					continue
 				}
 				signals := triage.EvaluateSignals(pr, prContext)
-				request := llm.Request{PR: pr, Context: prContext, Model: model, Temp: 0.2, Schema: llm.VerdictSchema}
-				if deps.provider.Name() == "ollama" {
+				request := llm.Request{PR: pr, Context: prContext, Model: model, Temp: 0.0, Schema: llm.VerdictSchema}
+				if deps.provider.Name() != "fake" {
 					request.System = "Classify dependency update pull requests as safe (low risk), review (human attention needed), or risk (high risk, breaking, or security relevant). Lockfile-only changes are usually safe; major version bumps and security advisories are usually risk. Return only JSON matching the supplied schema."
 					request.User = buildClassificationPrompt(pr, prContext, signals)
 				}
@@ -167,7 +193,7 @@ func makeCheckCommand(deps *checkDependencies) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVarP(&repo, "repo", "r", "", "GitHub repository in owner/repo format")
-	cmd.Flags().StringVar(&providerName, "provider", "fake", "LLM provider (fake or ollama)")
+	cmd.Flags().StringVar(&providerName, "provider", "fake", "LLM provider (fake, ollama, gemini, groq, or openai)")
 	cmd.Flags().StringVar(&model, "model", "", "model name (provider default when omitted)")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "emit JSON output")
 	cmd.Flags().IntVar(&limit, "limit", 25, "maximum open pull requests to process")
@@ -179,6 +205,13 @@ func makeCheckCommand(deps *checkDependencies) *cobra.Command {
 	_ = cmd.Flags().MarkHidden("fake-verdict")
 
 	return cmd
+}
+
+func resolveAPIKey(environment, configured string) string {
+	if strings.TrimSpace(environment) != "" {
+		return strings.TrimSpace(environment)
+	}
+	return strings.TrimSpace(configured)
 }
 
 func buildClassificationPrompt(pr depgh.PR, context depgh.PRContext, signals []triage.Signal) string {

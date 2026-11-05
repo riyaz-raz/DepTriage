@@ -43,7 +43,7 @@ type OpenAIConfig struct {
 func Defaults() Config {
 	return Config{
 		Ollama: OllamaConfig{Host: "http://localhost:11434", Model: "llama3.2:1b"},
-		Gemini: ProviderConfig{Model: "gemini-2.0-flash"},
+		Gemini: ProviderConfig{Model: "gemini-3.8-flash"},
 		Groq:   ProviderConfig{Model: "llama-3.3-70b-versatile"},
 		OpenAI: OpenAIConfig{BaseURL: "https://api.openai.com/v1", Model: "gpt-4o-mini"},
 		Keys:   map[string]string{"gemini": "", "groq": "", "openai": ""},
@@ -153,7 +153,7 @@ host = "http://localhost:11434"
 model = "llama3.2:1b"
 
 [gemini]
-model = "gemini-2.0-flash"
+model = "gemini-3.8-flash"
 
 [groq]
 model = "llama-3.3-70b-versatile"
