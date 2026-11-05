@@ -5,10 +5,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/deptriage/deptriage/internal/llm"
@@ -46,7 +49,12 @@ type generateRequest struct {
 		ResponseMIMEType string          `json:"responseMimeType"`
 		ResponseSchema   json.RawMessage `json:"responseSchema"`
 		Temperature      float64         `json:"temperature"`
+		ThinkingConfig   *thinkingConfig `json:"thinkingConfig,omitempty"`
 	} `json:"generationConfig"`
+}
+
+type thinkingConfig struct {
+	ThinkingBudget int `json:"thinkingBudget"`
 }
 
 type textPart struct {
@@ -105,7 +113,7 @@ func (c *Client) Classify(ctx context.Context, req llm.Request) (triage.Verdict,
 		return triage.Verdict{}, fmt.Errorf("Gemini API key is required")
 	}
 	model := c.Model(req.Model)
-	content, err := c.generate(ctx, req, model)
+	content, err := c.generateWithThinkingFallback(ctx, req, model)
 	if err != nil {
 		return triage.Verdict{}, err
 	}
@@ -115,7 +123,7 @@ func (c *Client) Classify(ctx context.Context, req llm.Request) (triage.Verdict,
 	}
 	repair := req
 	repair.User = llm.RepairUserMessage(req.User, content, validationErr)
-	content, err = c.generate(ctx, repair, model)
+	content, err = c.generateWithThinkingFallback(ctx, repair, model)
 	if err != nil {
 		return triage.Verdict{}, fmt.Errorf("request Gemini verdict repair: %w", err)
 	}
@@ -126,7 +134,26 @@ func (c *Client) Classify(ctx context.Context, req llm.Request) (triage.Verdict,
 	return verdict, nil
 }
 
-func (c *Client) generate(ctx context.Context, req llm.Request, model string) (string, error) {
+func (c *Client) generateWithThinkingFallback(ctx context.Context, req llm.Request, model string) (string, error) {
+	content, err := c.generate(ctx, req, model, supportsThinkingConfig(model))
+	var thinkingErr *thinkingConfigRejectedError
+	if !errors.As(err, &thinkingErr) {
+		return content, err
+	}
+	slog.Info(fmt.Sprintf("gemini: model %s rejected thinkingConfig, retried without it", model))
+	return c.generate(ctx, req, model, false)
+}
+
+type thinkingConfigRejectedError struct{ body string }
+
+func (e *thinkingConfigRejectedError) Error() string { return "Gemini rejected thinkingConfig" }
+
+func supportsThinkingConfig(model string) bool {
+	// thinkingConfig is only accepted by thinking-capable models (Gemini 3.x and 2.5 family). Sending it to older models returns 400.
+	return strings.HasPrefix(model, "gemini-3.") || strings.Contains(model, "gemini-2.5")
+}
+
+func (c *Client) generate(ctx context.Context, req llm.Request, model string, thinking bool) (string, error) {
 	payload := generateRequest{}
 	payload.SystemInstruction.Parts = []textPart{{Text: req.System}}
 	payload.Contents = []struct {
@@ -136,13 +163,16 @@ func (c *Client) generate(ctx context.Context, req llm.Request, model string) (s
 	payload.GenerationConfig.ResponseMIMEType = "application/json"
 	payload.GenerationConfig.ResponseSchema = geminiSchema
 	payload.GenerationConfig.Temperature = req.Temp
+	if thinking {
+		payload.GenerationConfig.ThinkingConfig = &thinkingConfig{ThinkingBudget: 0}
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return "", fmt.Errorf("encode Gemini request: %w", err)
 	}
 	endpoint := c.endpoint + "/v1beta/models/" + url.PathEscape(model) + ":generateContent"
-	response, err := llm.DoWithRetry(ctx, func() (*http.Response, error) {
-		request, requestErr := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	response, err := llm.DoWithRetry(ctx, func(attemptCtx context.Context) (*http.Response, error) {
+		request, requestErr := http.NewRequestWithContext(attemptCtx, http.MethodPost, endpoint, bytes.NewReader(body))
 		if requestErr != nil {
 			return nil, fmt.Errorf("create Gemini request: %w", requestErr)
 		}
@@ -159,8 +189,15 @@ func (c *Client) generate(ctx context.Context, req llm.Request, model string) (s
 	defer response.Body.Close()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		message, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
+		messageText := strings.TrimSpace(string(message))
+		if response.StatusCode == http.StatusNotFound {
+			return "", modelNotAvailableError(model, messageText)
+		}
+		if response.StatusCode == http.StatusBadRequest && strings.Contains(strings.ToLower(messageText), "thinking") {
+			return "", &thinkingConfigRejectedError{body: messageText}
+		}
 		if len(message) > 0 {
-			return "", fmt.Errorf("Gemini API returned HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(message)))
+			return "", fmt.Errorf("Gemini API returned HTTP %d: %s", response.StatusCode, messageText)
 		}
 		return "", fmt.Errorf("Gemini API returned HTTP %d", response.StatusCode)
 	}
@@ -172,6 +209,15 @@ func (c *Client) generate(ctx context.Context, req llm.Request, model string) (s
 		return "", fmt.Errorf("Gemini response contained no candidate text")
 	}
 	return result.Candidates[0].Content.Parts[0].Text, nil
+}
+
+var suggestedModelPattern = regexp.MustCompile(`(?i)use\s+models/((?:gemini-)?[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*)`)
+
+func modelNotAvailableError(requested, body string) error {
+	if match := suggestedModelPattern.FindStringSubmatch(body); len(match) == 2 {
+		return fmt.Errorf(`gemini: model %q not available. Server suggests: %q. Retry with: --model %s (or update config [gemini].model).`, requested, match[1], match[1])
+	}
+	return fmt.Errorf(`gemini: model %q not available (HTTP 404). Check https://ai.google.dev/gemini-api/docs/models for current models.`, requested)
 }
 
 func decodeVerdict(content string) (triage.Verdict, error) {

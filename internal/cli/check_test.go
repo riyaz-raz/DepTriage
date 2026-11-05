@@ -14,7 +14,9 @@ import (
 	"testing"
 
 	depgh "github.com/deptriage/deptriage/internal/github"
+	"github.com/deptriage/deptriage/internal/llm"
 	"github.com/deptriage/deptriage/internal/llm/fake"
+	"github.com/deptriage/deptriage/internal/triage"
 )
 
 var updateCheckGolden = flag.Bool("update", false, "update check command golden files")
@@ -104,6 +106,41 @@ func TestCheckEndToEndExitCodes(t *testing.T) {
 			}
 
 		})
+	}
+}
+
+type fixedGitHubClient struct{ pr depgh.PR }
+
+func (c fixedGitHubClient) ListOpenDependencyPRs(context.Context, string, string, depgh.ListOptions) ([]depgh.PR, error) {
+	return []depgh.PR{c.pr}, nil
+}
+
+func (c fixedGitHubClient) FetchContext(context.Context, string, string, int) (depgh.PRContext, error) {
+	return depgh.PRContext{PR: c.pr, CIStatus: depgh.CIUnknown}, nil
+}
+
+type failingProvider struct{ err error }
+
+func (p failingProvider) Name() string { return "gemini" }
+func (p failingProvider) Classify(context.Context, llm.Request) (triage.Verdict, error) {
+	return triage.Verdict{}, p.err
+}
+
+func TestClassifyErrorIsReportedAsPartialExitFour(t *testing.T) {
+	pr := depgh.PR{Number: 9, Title: "Update dependency", Author: "dependabot[bot]"}
+	errText := `gemini: model "gemini-old" not available. Server suggests: "gemini-new". Retry with: --model gemini-new (or update config [gemini].model).`
+	cmd := makeCheckCommand(&checkDependencies{github: fixedGitHubClient{pr: pr}, provider: failingProvider{err: errors.New(errText)}})
+	var output, stderr strings.Builder
+	cmd.SetOut(&output)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"-r", "owner/repo", "--provider", "gemini"})
+	err := cmd.Execute()
+	var exitErr *ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 4 {
+		t.Fatalf("exit error = %v, want code 4", err)
+	}
+	if !strings.Contains(stderr.String(), "--model gemini-new") || !strings.Contains(output.String(), "0 PRs:") {
+		t.Fatalf("missing actionable partial report; output=%q stderr=%q", output.String(), stderr.String())
 	}
 }
 

@@ -114,8 +114,8 @@ func (c *Client) request(ctx context.Context, req llm.Request, model string) (st
 		return "", fmt.Errorf("encode Ollama request: %w", err)
 	}
 	endpoint := c.host + "/api/chat"
-	response, err := llm.DoWithRetry(ctx, func() (*http.Response, error) {
-		request, requestErr := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	response, err := llm.DoWithRetry(ctx, func(attemptCtx context.Context) (*http.Response, error) {
+		request, requestErr := http.NewRequestWithContext(attemptCtx, http.MethodPost, endpoint, bytes.NewReader(body))
 		if requestErr != nil {
 			return nil, fmt.Errorf("create Ollama request: %w", requestErr)
 		}

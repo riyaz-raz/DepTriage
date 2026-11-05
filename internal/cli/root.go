@@ -2,12 +2,14 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
-
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/BurntSushi/toml"
 	"github.com/deptriage/deptriage/internal/config"
@@ -16,7 +18,10 @@ import (
 
 // Execute runs the command and exits with an actionable status code.
 func Execute(version string) {
-	if err := NewRoot(version).Execute(); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	err := NewRoot(version).ExecuteContext(ctx)
+	stop()
+	if err != nil {
 		var usageErr *UsageError
 		var exitErr *ExitError
 		if errors.As(err, &exitErr) {

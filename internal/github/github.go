@@ -90,20 +90,35 @@ func (e *RateLimitError) Error() string {
 }
 
 // GitHubClient is the google/go-github implementation of Client.
-type GitHubClient struct{ client *gh.Client }
+type GitHubClient struct {
+	client  *gh.Client
+	timeout time.Duration
+}
+
+const defaultRequestTimeout = 90 * time.Second
 
 // NewClient creates an authenticated read-only GitHub API client.
 func NewClient(ctx context.Context, token string) *GitHubClient {
+	return NewClientWithTimeout(ctx, token, defaultRequestTimeout)
+}
+
+// NewClientWithTimeout creates a GitHub client with a per-request timeout. A zero timeout disables the per-request deadline.
+func NewClientWithTimeout(ctx context.Context, token string, timeout time.Duration) *GitHubClient {
 	httpClient := http.DefaultClient
 	if token != "" {
 		httpClient = oauth2.NewClient(ctx, oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token}))
 	}
-	return &GitHubClient{client: gh.NewClient(httpClient)}
+	return &GitHubClient{client: gh.NewClient(httpClient), timeout: timeout}
 }
 
 // NewClientWithBaseURL creates a client configured for a GitHub-compatible API endpoint.
 func NewClientWithBaseURL(ctx context.Context, token, baseURL string) (*GitHubClient, error) {
-	client := NewClient(ctx, token)
+	return NewClientWithBaseURLAndTimeout(ctx, token, baseURL, defaultRequestTimeout)
+}
+
+// NewClientWithBaseURLAndTimeout creates a GitHub client with a custom endpoint and per-request timeout.
+func NewClientWithBaseURLAndTimeout(ctx context.Context, token, baseURL string, timeout time.Duration) (*GitHubClient, error) {
+	client := NewClientWithTimeout(ctx, token, timeout)
 	parsed, err := client.client.WithEnterpriseURLs(baseURL, baseURL)
 	if err != nil {
 		return nil, fmt.Errorf("configure GitHub API URL: %w", err)
@@ -132,7 +147,9 @@ func (c *GitHubClient) ListOpenDependencyPRs(ctx context.Context, owner, repo st
 	for len(result) < limit {
 		perPage := 100
 		listOpts := &gh.PullRequestListOptions{State: "open", ListOptions: gh.ListOptions{Page: page, PerPage: perPage}}
-		pulls, response, err := c.client.PullRequests.List(ctx, owner, repo, listOpts)
+		requestCtx, cancel := c.requestContext(ctx)
+		pulls, response, err := c.client.PullRequests.List(requestCtx, owner, repo, listOpts)
+		cancel()
 		if err != nil {
 			return nil, c.wrapAPIError(err, response)
 		}
@@ -162,7 +179,9 @@ func (c *GitHubClient) ListOpenDependencyPRs(ctx context.Context, owner, repo st
 
 // FetchContext fetches PR metadata, changed files, and combined status/check-run state.
 func (c *GitHubClient) FetchContext(ctx context.Context, owner, repo string, prNumber int) (PRContext, error) {
-	pull, response, err := c.client.PullRequests.Get(ctx, owner, repo, prNumber)
+	requestCtx, cancel := c.requestContext(ctx)
+	pull, response, err := c.client.PullRequests.Get(requestCtx, owner, repo, prNumber)
+	cancel()
 	if err != nil {
 		return PRContext{}, c.wrapAPIError(err, response)
 	}
@@ -171,7 +190,9 @@ func (c *GitHubClient) FetchContext(ctx context.Context, owner, repo string, prN
 	additions, deletions := 0, 0
 	for page := 1; len(files) < 300; page++ {
 		pageSize := min(100, 300-len(files))
-		list, pageResponse, err := c.client.PullRequests.ListFiles(ctx, owner, repo, prNumber, &gh.ListOptions{Page: page, PerPage: pageSize})
+		requestCtx, cancel := c.requestContext(ctx)
+		list, pageResponse, err := c.client.PullRequests.ListFiles(requestCtx, owner, repo, prNumber, &gh.ListOptions{Page: page, PerPage: pageSize})
+		cancel()
 		if err != nil {
 			return PRContext{}, c.wrapAPIError(err, pageResponse)
 		}
@@ -203,11 +224,15 @@ func (c *GitHubClient) fetchCI(ctx context.Context, owner, repo, sha string) (CI
 	if sha == "" {
 		return CIUnknown, nil
 	}
-	combined, response, statusErr := c.client.Repositories.GetCombinedStatus(ctx, owner, repo, sha, nil)
+	requestCtx, cancel := c.requestContext(ctx)
+	combined, response, statusErr := c.client.Repositories.GetCombinedStatus(requestCtx, owner, repo, sha, nil)
+	cancel()
 	if statusErr != nil && response != nil && response.StatusCode != http.StatusNotFound {
 		return CIUnknown, c.wrapAPIError(statusErr, response)
 	}
-	checks, checkResponse, checksErr := c.client.Checks.ListCheckRunsForRef(ctx, owner, repo, sha, nil)
+	requestCtx, cancel = c.requestContext(ctx)
+	checks, checkResponse, checksErr := c.client.Checks.ListCheckRunsForRef(requestCtx, owner, repo, sha, nil)
+	cancel()
 	if checksErr != nil && checkResponse != nil && checkResponse.StatusCode != http.StatusNotFound {
 		return CIUnknown, c.wrapAPIError(checksErr, checkResponse)
 	}
@@ -249,6 +274,13 @@ func (c *GitHubClient) fetchCI(ctx context.Context, owner, repo, sha string) (CI
 		return CIPassing, nil
 	}
 	return CIUnknown, nil
+}
+
+func (c *GitHubClient) requestContext(parent context.Context) (context.Context, context.CancelFunc) {
+	if c.timeout <= 0 {
+		return parent, func() {}
+	}
+	return context.WithTimeout(parent, c.timeout)
 }
 
 func (c *GitHubClient) wrapAPIError(err error, response *gh.Response) error {

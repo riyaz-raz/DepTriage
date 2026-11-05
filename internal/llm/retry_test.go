@@ -11,7 +11,7 @@ import (
 func TestDoWithRetry(t *testing.T) {
 	t.Run("retries server error", func(t *testing.T) {
 		calls := 0
-		response, err := DoWithRetry(context.Background(), func() (*http.Response, error) {
+		response, err := DoWithRetry(context.Background(), func(context.Context) (*http.Response, error) {
 			calls++
 			status := http.StatusOK
 			if calls == 1 {
@@ -25,7 +25,7 @@ func TestDoWithRetry(t *testing.T) {
 	})
 	t.Run("does not retry authentication", func(t *testing.T) {
 		calls := 0
-		response, err := DoWithRetry(context.Background(), func() (*http.Response, error) {
+		response, err := DoWithRetry(context.Background(), func(context.Context) (*http.Response, error) {
 			calls++
 			return &http.Response{StatusCode: http.StatusUnauthorized, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(""))}, nil
 		}, 2)

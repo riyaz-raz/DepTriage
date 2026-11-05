@@ -36,9 +36,10 @@ func TestGeminiAdapter(t *testing.T) {
 					Parts []textPart `json:"parts"`
 				} `json:"contents"`
 				GenerationConfig struct {
-					ResponseMIMEType string         `json:"responseMimeType"`
-					ResponseSchema   map[string]any `json:"responseSchema"`
-					Temperature      float64        `json:"temperature"`
+					ResponseMIMEType string          `json:"responseMimeType"`
+					ResponseSchema   map[string]any  `json:"responseSchema"`
+					Temperature      float64         `json:"temperature"`
+					ThinkingConfig   *thinkingConfig `json:"thinkingConfig"`
 				} `json:"generationConfig"`
 			}
 			if err := json.Unmarshal(body, &payload); err != nil {

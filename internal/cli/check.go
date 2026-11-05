@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -71,8 +70,8 @@ func makeCheckCommand(deps *checkDependencies) *cobra.Command {
 			if limit < 1 {
 				return &ExitError{Code: 2, Err: fmt.Errorf("--limit must be greater than zero")}
 			}
-			if timeout <= 0 {
-				return &ExitError{Code: 2, Err: fmt.Errorf("--timeout must be greater than zero")}
+			if timeout < 0 {
+				return &ExitError{Code: 2, Err: fmt.Errorf("--timeout must not be negative")}
 			}
 			if deps == nil {
 				var selectedProvider llm.Provider
@@ -131,12 +130,9 @@ func makeCheckCommand(deps *checkDependencies) *cobra.Command {
 				if token == "" {
 					return &ExitError{Code: 2, Err: fmt.Errorf("GITHUB_TOKEN not found in --github-token, environment, or .env; create a classic PAT with public_repo (or repo) read scope")}
 				}
-				ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
-				defer cancel()
-				deps = &checkDependencies{github: depgh.NewClient(ctx, token), provider: selectedProvider}
+				deps = &checkDependencies{github: depgh.NewClientWithTimeout(cmd.Context(), token, timeout), provider: selectedProvider}
 			}
-			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
-			defer cancel()
+			ctx := cmd.Context()
 			prs, err := deps.github.ListOpenDependencyPRs(ctx, owner, repository, depgh.ListOptions{Limit: limit, IncludeAllAuthors: includeAll})
 			if err != nil {
 				return fmt.Errorf("list pull requests: %w", err)
@@ -151,12 +147,12 @@ func makeCheckCommand(deps *checkDependencies) *cobra.Command {
 					continue
 				}
 				signals := triage.EvaluateSignals(pr, prContext)
-				request := llm.Request{PR: pr, Context: prContext, Model: model, Temp: 0.0, Schema: llm.VerdictSchema}
+				request := llm.Request{PR: pr, Context: prContext, Model: model, Temp: 0.0, Timeout: timeout, Schema: llm.VerdictSchema}
 				if deps.provider.Name() != "fake" {
 					request.System = "Classify dependency update pull requests as safe (low risk), review (human attention needed), or risk (high risk, breaking, or security relevant). Lockfile-only changes are usually safe; major version bumps and security advisories are usually risk. Return only JSON matching the supplied schema."
 					request.User = buildClassificationPrompt(pr, prContext, signals)
 				}
-				verdict, classifyErr := deps.provider.Classify(ctx, request)
+				verdict, classifyErr := deps.provider.Classify(llm.WithRequestTimeout(ctx, request.Timeout), request)
 				if classifyErr != nil {
 					fmt.Fprintf(cmd.ErrOrStderr(), "warning: PR #%d: classify: %v\n", pr.Number, classifyErr)
 					partial = true

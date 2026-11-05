@@ -4,6 +4,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/deptriage/deptriage/internal/github"
 	"github.com/deptriage/deptriage/internal/triage"
@@ -16,6 +17,7 @@ type Request struct {
 	Schema  json.RawMessage
 	Model   string
 	Temp    float64
+	Timeout time.Duration
 	PR      github.PR
 	Context github.PRContext
 }
