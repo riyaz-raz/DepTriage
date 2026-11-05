@@ -18,6 +18,11 @@ import (
 func Execute(version string) {
 	if err := NewRoot(version).Execute(); err != nil {
 		var usageErr *UsageError
+		var exitErr *ExitError
+		if errors.As(err, &exitErr) {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(exitErr.Code)
+		}
 		if errors.As(err, &usageErr) {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(2)
@@ -41,6 +46,9 @@ func NewRoot(version string) *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
+	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
+		return &ExitError{Code: 2, Err: err}
+	})
 	root.AddCommand(&cobra.Command{
 		Use:   "version",
 		Short: "Print the version",
@@ -51,6 +59,7 @@ func NewRoot(version string) *cobra.Command {
 		},
 	})
 	root.AddCommand(configCommand())
+	root.AddCommand(newCheckCommand())
 	return root
 }
 

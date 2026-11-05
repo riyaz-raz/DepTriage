@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "repo": "o/r",
+  "provider": "fake",
+  "model": "fake",
+  "generated_at": "<timestamp>",
+  "summary": {
+    "total": 1,
+    "safe": 1,
+    "review": 0,
+    "risk": 0,
+    "degraded": 0
+  },
+  "items": [
+    {
+      "number": 1,
+      "title": "Bump widget from 1.0.0 to 1.0.1",
+      "author": "dependabot[bot]",
+      "url": "https://github.com/o/r/pull/1",
+      "dependency": "widget",
+      "from": "1.0.0",
+      "to": "1.0.1",
+      "ci": "unknown",
+      "verdict": "safe",
+      "confidence": 0.9,
+      "summary": "fake provider",
+      "reasons": [
+        "fake"
+      ],
+      "signals": [
+        "patch_version_bump",
+        "ci_unknown"
+      ],
+      "degraded": false
+    }
+  ]
+}

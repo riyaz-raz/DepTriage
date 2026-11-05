@@ -9,3 +9,6 @@
 
 # Local configuration and secrets
 /config.toml
+/.env
+/.env.*
+!/.env.example

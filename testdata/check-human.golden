@@ -1,0 +1,18 @@
+PR  DEPENDENCY  UPDATE          CI       VERDICT  CONFIDENCE  SIGNALS
+#1  widget      1.0.0 -> 1.0.1  unknown  risk     90%         patch_version_bump,ci_unknown,security_label
+1 PRs: 0 safe, 0 review, 1 risk (provider: fake/fake)
+Usage:
+  check [flags]
+
+Flags:
+      --fail-on string        exit 3 when risk, review, or none is reached (default "none")
+      --github-token string   GitHub personal access token (or GITHUB_TOKEN)
+  -h, --help                  help for check
+      --include-all-authors   include PRs from all authors
+      --json                  emit JSON output
+      --limit int             maximum open pull requests to process (default 25)
+      --model string          model label shown in report (default "fake")
+      --provider string       LLM provider (M2: fake only) (default "fake")
+  -r, --repo string           GitHub repository in owner/repo format
+      --timeout duration      overall check timeout (default 1m30s)
+
